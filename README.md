@@ -45,12 +45,13 @@ pip install .
 # Run a WAL checkpoint
 sqlite-checkpoint checkpoint myapp.db
 sqlite-checkpoint cp myapp.db -m truncate
+sqlite-checkpoint checkpoint myapp.db --require-complete
 
 # Create an atomic backup
-sqlite-checkpoint backup myapp.db /backups/myapp-2026-04-06.db
+sqlite-checkpoint backup myapp.db /backups/myapp-2026-04-06.db --pages-per-step 1000 --pause-ms 0
 
 # Checkpoint + backup in one step (recommended)
-sqlite-checkpoint snapshot myapp.db /backups/myapp-snap.db
+sqlite-checkpoint snapshot myapp.db /backups/myapp-snap.db --pages-per-step 1000 --pause-ms 0 --require-complete
 
 # Inspect database state
 sqlite-checkpoint info myapp.db
@@ -58,6 +59,12 @@ sqlite-checkpoint info myapp.db
 # JSON output for scripting
 sqlite-checkpoint --json snapshot myapp.db /backups/snap.db
 ```
+
+Source databases are opened in SQLite `mode=ro` or `mode=rw`; missing files are
+never created. The opened file identity and schema are verified before backup,
+and failures never publish a destination artifact. `--require-complete` returns
+exit code `3` for a busy or partial checkpoint so automation can distinguish it
+from a complete result.
 
 ### Python API
 

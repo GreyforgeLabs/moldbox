@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import math
 import os
 import sqlite3
+import stat
 import time
 from dataclasses import dataclass
 from enum import Enum
+from numbers import Real
 from pathlib import Path
+from urllib.parse import quote
 
 
 class CheckpointMode(Enum):
@@ -36,6 +40,14 @@ class CheckpointResult:
     def fully_checkpointed(self) -> bool:
         return not self.busy and self.wal_pages == self.checkpointed_pages
 
+    @property
+    def status(self) -> str:
+        if self.busy:
+            return "busy"
+        if self.fully_checkpointed:
+            return "complete"
+        return "partial"
+
 
 @dataclass(frozen=True)
 class BackupResult:
@@ -56,6 +68,13 @@ class SnapshotResult:
     backup: BackupResult
 
 
+@dataclass(frozen=True)
+class _DatabaseIdentity:
+    path: Path
+    device: int
+    inode: int
+
+
 def checkpoint(
     db_path: str | Path,
     mode: CheckpointMode = CheckpointMode.PASSIVE,
@@ -73,12 +92,11 @@ def checkpoint(
         FileNotFoundError: If the database file does not exist.
         sqlite3.OperationalError: If the checkpoint fails.
     """
-    db_path = Path(db_path)
-    if not db_path.exists():
-        raise FileNotFoundError(f"Database not found: {db_path}")
+    identity = _validated_existing_database_path(Path(db_path))
+    db_path = identity.path
 
     t0 = time.monotonic()
-    conn = sqlite3.connect(str(db_path))
+    conn = _connect_existing(identity, readonly=False)
     try:
         # PRAGMA wal_checkpoint returns (result, wal_pages, checkpointed_pages).
         # result: 0 = success, 1 = blocked by concurrent reader (PASSIVE only).
@@ -103,7 +121,7 @@ def backup(
     db_path: str | Path,
     dest_path: str | Path,
     *,
-    pages_per_step: int = -1,
+    pages_per_step: int = 1000,
     pause_ms: float = 0,
 ) -> BackupResult:
     """Create an atomic backup of a SQLite database using the online backup API.
@@ -114,7 +132,7 @@ def backup(
     Args:
         db_path: Path to the source database.
         dest_path: Path for the backup file. Parent directory must exist.
-        pages_per_step: Pages to copy per step (-1 = all at once).
+        pages_per_step: Positive number of pages to copy per step.
         pause_ms: Milliseconds to sleep between steps (for throttling).
 
     Returns:
@@ -124,19 +142,21 @@ def backup(
         FileNotFoundError: If the source database does not exist.
         FileExistsError: If the destination already exists.
     """
-    db_path = Path(db_path)
+    _validate_backup_controls(pages_per_step=pages_per_step, pause_ms=pause_ms)
+    identity = _validated_existing_database_path(Path(db_path))
+    db_path = identity.path
     dest_path = Path(dest_path)
 
-    if not db_path.exists():
-        raise FileNotFoundError(f"Database not found: {db_path}")
     if dest_path.exists():
         raise FileExistsError(f"Destination already exists: {dest_path}")
 
     tmp_path = dest_path.with_name(f".{dest_path.name}.tmp-{os.getpid()}-{time.time_ns()}")
     t0 = time.monotonic()
-    source = sqlite3.connect(str(db_path))
-    dest = sqlite3.connect(str(tmp_path))
+    source: sqlite3.Connection | None = None
+    dest: sqlite3.Connection | None = None
     try:
+        source = _connect_existing(identity, readonly=True)
+        dest = sqlite3.connect(str(tmp_path))
         source.backup(dest, pages=pages_per_step, sleep=pause_ms / 1000)
         dest.close()
         source.close()
@@ -177,7 +197,8 @@ def snapshot(
     dest_path: str | Path,
     *,
     checkpoint_mode: CheckpointMode = CheckpointMode.PASSIVE,
-    pages_per_step: int = -1,
+    pages_per_step: int = 1000,
+    pause_ms: float = 0,
 ) -> SnapshotResult:
     """Checkpoint the WAL, then create an atomic backup.
 
@@ -189,13 +210,15 @@ def snapshot(
         db_path: Path to the source database.
         dest_path: Path for the backup file.
         checkpoint_mode: WAL checkpoint mode to use before backup.
-        pages_per_step: Pages per backup step (-1 = all at once).
+        pages_per_step: Positive number of pages per backup step.
+        pause_ms: Milliseconds to sleep between steps (for throttling).
 
     Returns:
         SnapshotResult containing both checkpoint and backup results.
     """
+    _validate_backup_controls(pages_per_step=pages_per_step, pause_ms=pause_ms)
     cp = checkpoint(db_path, mode=checkpoint_mode)
-    bk = backup(db_path, dest_path, pages_per_step=pages_per_step)
+    bk = backup(db_path, dest_path, pages_per_step=pages_per_step, pause_ms=pause_ms)
     return SnapshotResult(checkpoint=cp, backup=bk)
 
 
@@ -206,13 +229,12 @@ def db_info(db_path: str | Path) -> dict:
         Dict with keys: path, size_bytes, journal_mode, wal_file_exists,
         wal_size_bytes, page_size, page_count, freelist_count.
     """
-    db_path = Path(db_path)
-    if not db_path.exists():
-        raise FileNotFoundError(f"Database not found: {db_path}")
+    identity = _validated_existing_database_path(Path(db_path))
+    db_path = identity.path
 
     wal_path = db_path.with_suffix(db_path.suffix + "-wal")
 
-    conn = sqlite3.connect(str(db_path))
+    conn = _connect_existing(identity, readonly=True)
     try:
         journal_mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
         page_size = conn.execute("PRAGMA page_size").fetchone()[0]
@@ -221,12 +243,13 @@ def db_info(db_path: str | Path) -> dict:
     finally:
         conn.close()
 
+    wal_exists, wal_size = _file_context(wal_path)
     return {
         "path": str(db_path),
         "size_bytes": db_path.stat().st_size,
         "journal_mode": journal_mode,
-        "wal_file_exists": wal_path.exists(),
-        "wal_size_bytes": wal_path.stat().st_size if wal_path.exists() else 0,
+        "wal_file_exists": wal_exists,
+        "wal_size_bytes": wal_size,
         "page_size": page_size,
         "page_count": page_count,
         "freelist_count": freelist,
@@ -244,10 +267,81 @@ def _sha256(path: Path) -> str:
 
 def _quick_check(path: Path) -> None:
     """Validate a SQLite file before publishing it."""
-    conn = sqlite3.connect(str(path))
+    identity = _validated_existing_database_path(path)
+    conn = _connect_existing(identity, readonly=True, immutable=True)
     try:
         result = conn.execute("PRAGMA quick_check").fetchone()
     finally:
         conn.close()
     if not result or result[0] != "ok":
         raise sqlite3.DatabaseError(f"SQLite quick_check failed for temporary backup: {result!r}")
+
+
+def _validate_backup_controls(*, pages_per_step: int, pause_ms: float) -> None:
+    if isinstance(pages_per_step, bool) or not isinstance(pages_per_step, int):
+        raise ValueError("pages_per_step must be a positive integer")
+    if pages_per_step <= 0:
+        raise ValueError("pages_per_step must be greater than zero")
+    if isinstance(pause_ms, bool) or not isinstance(pause_ms, Real):
+        raise ValueError("pause_ms must be a finite nonnegative number")
+    pause_value = float(pause_ms)
+    if not math.isfinite(pause_value) or pause_value < 0:
+        raise ValueError("pause_ms must be a finite nonnegative number")
+
+
+def _validated_existing_database_path(path: Path) -> _DatabaseIdentity:
+    try:
+        initial = path.lstat()
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(f"Database not found: {path}") from exc
+    if stat.S_ISLNK(initial.st_mode) or not stat.S_ISREG(initial.st_mode):
+        raise FileNotFoundError(f"Database is not a regular file: {path}")
+    try:
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise FileNotFoundError(f"Database cannot be opened safely: {path}") from exc
+    try:
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode) or not _same_identity(initial, opened):
+            raise FileNotFoundError(f"Database path changed during validation: {path}")
+        real_path = path.resolve(strict=True)
+        resolved = real_path.stat()
+        if not _same_identity(opened, resolved):
+            raise FileNotFoundError(f"Database path changed during validation: {path}")
+        return _DatabaseIdentity(real_path, opened.st_dev, opened.st_ino)
+    finally:
+        os.close(descriptor)
+
+
+def _connect_existing(
+    identity: _DatabaseIdentity, *, readonly: bool, immutable: bool = False
+) -> sqlite3.Connection:
+    mode = "ro" if readonly else "rw"
+    immutable_option = "&immutable=1" if immutable else ""
+    uri = f"file:{quote(str(identity.path), safe='/')}?mode={mode}{immutable_option}"
+    connection = sqlite3.connect(uri, uri=True)
+    try:
+        connection.execute("PRAGMA schema_version").fetchone()
+        current = identity.path.stat()
+        if (current.st_dev, current.st_ino) != (identity.device, identity.inode):
+            raise FileNotFoundError(f"Database path changed while opening: {identity.path}")
+    except Exception:
+        connection.close()
+        raise
+    return connection
+
+
+def _same_identity(left: os.stat_result, right: os.stat_result) -> bool:
+    return (left.st_dev, left.st_ino, left.st_mode) == (right.st_dev, right.st_ino, right.st_mode)
+
+
+def _file_context(path: Path) -> tuple[bool, int]:
+    """Return regular-file presence and size while tolerating WAL races."""
+    try:
+        metadata = path.lstat()
+    except OSError:
+        return False, 0
+    if not stat.S_ISREG(metadata.st_mode):
+        return False, 0
+    return True, metadata.st_size

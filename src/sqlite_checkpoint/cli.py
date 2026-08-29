@@ -39,6 +39,11 @@ def build_parser() -> argparse.ArgumentParser:
         default="passive",
         help="Checkpoint mode (default: passive)",
     )
+    cp.add_argument(
+        "--require-complete",
+        action="store_true",
+        help="Exit 3 when the checkpoint is busy or partial",
+    )
 
     # backup
     bk = sub.add_parser("backup", help="Create an atomic backup", aliases=["bk"])
@@ -47,8 +52,14 @@ def build_parser() -> argparse.ArgumentParser:
     bk.add_argument(
         "--pages-per-step",
         type=int,
-        default=-1,
-        help="Pages to copy per step (-1 = all at once)",
+        default=1000,
+        help="Positive pages to copy per backup step (default: 1000)",
+    )
+    bk.add_argument(
+        "--pause-ms",
+        type=float,
+        default=0,
+        help="Milliseconds to pause between backup steps (default: 0)",
     )
 
     # snapshot (checkpoint + backup)
@@ -61,6 +72,23 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["passive", "full", "restart", "truncate"],
         default="passive",
         help="Checkpoint mode (default: passive)",
+    )
+    sn.add_argument(
+        "--pages-per-step",
+        type=int,
+        default=1000,
+        help="Positive pages to copy per backup step (default: 1000)",
+    )
+    sn.add_argument(
+        "--pause-ms",
+        type=float,
+        default=0,
+        help="Milliseconds to pause between backup steps (default: 0)",
+    )
+    sn.add_argument(
+        "--require-complete",
+        action="store_true",
+        help="Exit 3 when the checkpoint is busy or partial",
     )
 
     # info
@@ -79,9 +107,16 @@ def main(argv: list[str] | None = None) -> int:
         if args.command in ("checkpoint", "cp"):
             result = checkpoint(args.database, mode=CheckpointMode[args.mode.upper()])
             _print_checkpoint(result, use_json)
+            if args.require_complete and not result.fully_checkpointed:
+                return 3
 
         elif args.command in ("backup", "bk"):
-            result = backup(args.database, args.destination, pages_per_step=args.pages_per_step)
+            result = backup(
+                args.database,
+                args.destination,
+                pages_per_step=args.pages_per_step,
+                pause_ms=args.pause_ms,
+            )
             _print_backup(result, use_json)
 
         elif args.command in ("snapshot", "snap"):
@@ -89,8 +124,12 @@ def main(argv: list[str] | None = None) -> int:
                 args.database,
                 args.destination,
                 checkpoint_mode=CheckpointMode[args.mode.upper()],
+                pages_per_step=args.pages_per_step,
+                pause_ms=args.pause_ms,
             )
             _print_snapshot(result, use_json)
+            if args.require_complete and not result.checkpoint.fully_checkpointed:
+                return 3
 
         elif args.command == "info":
             info = db_info(args.database)
@@ -116,6 +155,7 @@ def _print_checkpoint(r: CheckpointResult, as_json: bool) -> None:
                 {
                     "command": "checkpoint",
                     "mode": r.mode.value,
+                    "status": r.status,
                     "busy": r.busy,
                     "wal_pages": r.wal_pages,
                     "checkpointed_pages": r.checkpointed_pages,
@@ -126,8 +166,7 @@ def _print_checkpoint(r: CheckpointResult, as_json: bool) -> None:
             )
         )
     else:
-        status = "busy" if r.busy else ("ok" if r.fully_checkpointed else "partial")
-        print(f"checkpoint {r.mode.value} [{status}]")
+        print(f"checkpoint {r.mode.value} [{r.status}]")
         print(f"  busy:               {'yes' if r.busy else 'no'}")
         print(f"  wal pages:          {r.wal_pages}")
         print(f"  checkpointed:       {r.checkpointed_pages}")
@@ -165,6 +204,7 @@ def _print_snapshot(r: SnapshotResult, as_json: bool) -> None:
                     "command": "snapshot",
                     "checkpoint": {
                         "mode": r.checkpoint.mode.value,
+                        "status": r.checkpoint.status,
                         "busy": r.checkpoint.busy,
                         "wal_pages": r.checkpoint.wal_pages,
                         "checkpointed_pages": r.checkpoint.checkpointed_pages,
@@ -181,12 +221,7 @@ def _print_snapshot(r: SnapshotResult, as_json: bool) -> None:
             )
         )
     else:
-        status = (
-            "busy"
-            if r.checkpoint.busy
-            else ("ok" if r.checkpoint.fully_checkpointed else "partial")
-        )
-        print(f"snapshot complete [checkpoint {status}]")
+        print(f"snapshot complete [checkpoint {r.checkpoint.status}]")
         print(f"  checkpoint busy:    {'yes' if r.checkpoint.busy else 'no'}")
         print(f"  wal pages:          {r.checkpoint.wal_pages}")
         print(f"  checkpointed:       {r.checkpoint.checkpointed_pages}")
