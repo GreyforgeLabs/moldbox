@@ -8,6 +8,7 @@ import math
 import os
 import sqlite3
 import stat
+import tempfile
 import time
 from dataclasses import dataclass
 from enum import Enum
@@ -66,6 +67,14 @@ class SnapshotResult:
 
     checkpoint: CheckpointResult
     backup: BackupResult
+
+
+class IncompleteCheckpointError(RuntimeError):
+    """A required complete checkpoint was partial; no backup was published."""
+
+    def __init__(self, result: CheckpointResult) -> None:
+        self.result = result
+        super().__init__(f"checkpoint {result.status}; backup was not created")
 
 
 @dataclass(frozen=True)
@@ -150,10 +159,13 @@ def backup(
     if dest_path.exists():
         raise FileExistsError(f"Destination already exists: {dest_path}")
 
-    tmp_path = dest_path.with_name(f".{dest_path.name}.tmp-{os.getpid()}-{time.time_ns()}")
+    descriptor, tmp_name = tempfile.mkstemp(prefix=f".{dest_path.name}.tmp-", dir=dest_path.parent)
+    os.close(descriptor)
+    tmp_path = Path(tmp_name)
     t0 = time.monotonic()
     source: sqlite3.Connection | None = None
     dest: sqlite3.Connection | None = None
+    published = False
     try:
         source = _connect_existing(identity, readonly=True)
         dest = sqlite3.connect(str(tmp_path))
@@ -161,9 +173,19 @@ def backup(
         dest.close()
         source.close()
         _quick_check(tmp_path)
+        _fsync_file(tmp_path)
         # Atomic no-clobber publish: link succeeds only if dest_path does not exist.
         os.link(tmp_path, dest_path)
-    except Exception:
+        published = True
+        _fsync_directory(dest_path.parent)
+    except BaseException:
+        if published:
+            # Best-effort rollback after a post-publish sync failure. The caller
+            # must inspect the destination if this cleanup also fails.
+            with contextlib.suppress(OSError):
+                dest_path.unlink()
+            with contextlib.suppress(OSError):
+                _fsync_directory(dest_path.parent)
         with contextlib.suppress(OSError):
             tmp_path.unlink()
         with contextlib.suppress(Exception):
@@ -199,12 +221,12 @@ def snapshot(
     checkpoint_mode: CheckpointMode = CheckpointMode.PASSIVE,
     pages_per_step: int = 1000,
     pause_ms: float = 0,
+    require_complete: bool = False,
 ) -> SnapshotResult:
-    """Checkpoint the WAL, then create an atomic backup.
+    """Optionally maintain the WAL before creating a consistent online backup.
 
-    This is the recommended way to create a point-in-time backup: first flush
-    the WAL into the main database file, then use the online backup API to
-    copy the database atomically.
+    A checkpoint is not needed for backup consistency. Use this combined
+    operation only when WAL maintenance is also desired.
 
     Args:
         db_path: Path to the source database.
@@ -212,12 +234,15 @@ def snapshot(
         checkpoint_mode: WAL checkpoint mode to use before backup.
         pages_per_step: Positive number of pages per backup step.
         pause_ms: Milliseconds to sleep between steps (for throttling).
+        require_complete: Refuse backup publication after a partial checkpoint.
 
     Returns:
         SnapshotResult containing both checkpoint and backup results.
     """
     _validate_backup_controls(pages_per_step=pages_per_step, pause_ms=pause_ms)
     cp = checkpoint(db_path, mode=checkpoint_mode)
+    if require_complete and not cp.fully_checkpointed:
+        raise IncompleteCheckpointError(cp)
     bk = backup(db_path, dest_path, pages_per_step=pages_per_step, pause_ms=pause_ms)
     return SnapshotResult(checkpoint=cp, backup=bk)
 
@@ -263,6 +288,19 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: f.read(1 << 16), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def _fsync_file(path: Path) -> None:
+    with path.open("rb") as handle:
+        os.fsync(handle.fileno())
+
+
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def _quick_check(path: Path) -> None:

@@ -11,6 +11,7 @@ from sqlite_checkpoint.core import (
     BackupResult,
     CheckpointMode,
     CheckpointResult,
+    IncompleteCheckpointError,
     SnapshotResult,
     backup,
     checkpoint,
@@ -120,16 +121,19 @@ def main(argv: list[str] | None = None) -> int:
             _print_backup(result, use_json)
 
         elif args.command in ("snapshot", "snap"):
-            result = snapshot(
-                args.database,
-                args.destination,
-                checkpoint_mode=CheckpointMode[args.mode.upper()],
-                pages_per_step=args.pages_per_step,
-                pause_ms=args.pause_ms,
-            )
-            _print_snapshot(result, use_json)
-            if args.require_complete and not result.checkpoint.fully_checkpointed:
+            try:
+                result = snapshot(
+                    args.database,
+                    args.destination,
+                    checkpoint_mode=CheckpointMode[args.mode.upper()],
+                    pages_per_step=args.pages_per_step,
+                    pause_ms=args.pause_ms,
+                    require_complete=args.require_complete,
+                )
+            except IncompleteCheckpointError as error:
+                _print_incomplete_snapshot(error.result, use_json)
                 return 3
+            _print_snapshot(result, use_json)
 
         elif args.command == "info":
             info = db_info(args.database)
@@ -194,6 +198,25 @@ def _print_backup(r: BackupResult, as_json: bool) -> None:
         print(f"  size:               {r.size_bytes:,} bytes")
         print(f"  sha256:             {r.sha256}")
         print(f"  elapsed:            {r.elapsed_ms} ms")
+
+
+def _print_incomplete_snapshot(r: CheckpointResult, as_json: bool) -> None:
+    if as_json:
+        print(json.dumps({
+            "command": "snapshot",
+            "checkpoint": {
+                "mode": r.mode.value,
+                "status": r.status,
+                "busy": r.busy,
+                "wal_pages": r.wal_pages,
+                "checkpointed_pages": r.checkpointed_pages,
+                "fully_checkpointed": False,
+            },
+            "backup": None,
+            "published": False,
+        }))
+    else:
+        print(f"snapshot not created: checkpoint {r.status}")
 
 
 def _print_snapshot(r: SnapshotResult, as_json: bool) -> None:

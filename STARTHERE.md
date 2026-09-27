@@ -11,7 +11,7 @@ git clone https://github.com/GreyforgeLabs/sqlite-checkpoint.git && cd sqlite-ch
 
 ## What This Project Does
 
-Atomic SQLite backup and snapshot tool. Wraps SQLite's WAL checkpoint and online backup APIs into a single CLI and Python library — zero dependencies, safe under concurrent writes, no corruption risk.
+SQLite online backup and WAL checkpoint tool. Use `backup` for a consistent live copy; checkpointing is optional WAL maintenance. The CLI and Python library have no runtime Python dependencies. Test a restore before relying on a backup.
 
 ## Project Structure
 
@@ -48,7 +48,7 @@ sqlite-checkpoint/
 ```bash
 source .venv/bin/activate
 sqlite-checkpoint --version
-# Expected output: sqlite-checkpoint 0.1.0
+# Expected output: sqlite-checkpoint 0.3.0
 ```
 
 ## Key Entry Points

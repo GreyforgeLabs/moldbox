@@ -56,6 +56,7 @@ class TestBackup:
         assert dest.exists()
         assert result.size_bytes > 0
         assert len(result.sha256) == 64
+        assert dest.stat().st_mode & 0o777 == 0o600
 
     def test_backup_is_valid_database(self, wal_db, tmp_path):
         dest = tmp_path / "backup.db"
@@ -64,6 +65,39 @@ class TestBackup:
         rows = conn.execute("SELECT name FROM items ORDER BY id").fetchall()
         conn.close()
         assert rows == [("alpha",), ("bravo",)]
+
+    def test_backup_can_be_restored_and_passes_integrity_check(self, wal_db, tmp_path):
+        backup_path = tmp_path / "backup.db"
+        restored_path = tmp_path / "restored.db"
+        backup(wal_db, backup_path)
+        with sqlite3.connect(backup_path) as source, sqlite3.connect(restored_path) as restored:
+            source.backup(restored)
+            assert restored.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+            assert restored.execute("SELECT name FROM items ORDER BY id").fetchall() == [
+                ("alpha",), ("bravo",)
+            ]
+
+    def test_sync_failure_before_publish_leaves_no_destination(
+        self, wal_db, tmp_path, monkeypatch
+    ):
+        destination = tmp_path / "backup.db"
+        monkeypatch.setattr(
+            core, "_fsync_file", lambda _path: (_ for _ in ()).throw(OSError("sync failed"))
+        )
+        with pytest.raises(OSError, match="sync failed"):
+            backup(wal_db, destination)
+        assert not destination.exists()
+
+    def test_directory_sync_failure_rolls_back_published_name(
+        self, wal_db, tmp_path, monkeypatch
+    ):
+        destination = tmp_path / "backup.db"
+        monkeypatch.setattr(
+            core, "_fsync_directory", lambda _path: (_ for _ in ()).throw(OSError("sync failed"))
+        )
+        with pytest.raises(OSError, match="sync failed"):
+            backup(wal_db, destination)
+        assert not destination.exists()
 
     def test_backup_refuses_overwrite(self, wal_db, tmp_path):
         dest = tmp_path / "backup.db"
@@ -209,6 +243,17 @@ class TestSnapshot:
 
         with pytest.raises(ValueError, match="pages_per_step"):
             snapshot(wal_db, tmp_path / "snap.db", pages_per_step=0)
+
+    def test_required_checkpoint_failure_does_not_create_backup(
+        self, wal_db, tmp_path, monkeypatch
+    ):
+        incomplete = CheckpointResult(CheckpointMode.PASSIVE, False, 10, 4, str(wal_db), 1.0)
+        monkeypatch.setattr(core, "checkpoint", lambda *_args, **_kwargs: incomplete)
+        destination = tmp_path / "snap.db"
+        with pytest.raises(core.IncompleteCheckpointError) as error:
+            snapshot(wal_db, destination, require_complete=True)
+        assert error.value.result is incomplete
+        assert not destination.exists()
 
 
 class TestDbInfo:

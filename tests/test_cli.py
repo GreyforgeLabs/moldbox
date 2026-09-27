@@ -5,10 +5,9 @@ import json
 from sqlite_checkpoint import cli
 from sqlite_checkpoint.cli import main
 from sqlite_checkpoint.core import (
-    BackupResult,
     CheckpointMode,
     CheckpointResult,
-    SnapshotResult,
+    IncompleteCheckpointError,
 )
 
 
@@ -68,12 +67,11 @@ class TestCLI:
 
     def test_snapshot_option_parity_and_require_complete(self, tmp_path, capsys, monkeypatch):
         checkpoint_result = CheckpointResult(CheckpointMode.PASSIVE, False, 10, 4, "db", 1.0)
-        backup_result = BackupResult("db", str(tmp_path / "snap.db"), 1, "a" * 64, 1.0)
         captured = {}
 
         def fake_snapshot(database, destination, **kwargs):
             captured.update(database=database, destination=destination, **kwargs)
-            return SnapshotResult(checkpoint_result, backup_result)
+            raise IncompleteCheckpointError(checkpoint_result)
 
         monkeypatch.setattr(cli, "snapshot", fake_snapshot)
 
@@ -93,7 +91,9 @@ class TestCLI:
         assert rc == 3
         assert captured["pages_per_step"] == 17
         assert captured["pause_ms"] == 2.5
-        assert "checkpoint partial" in capsys.readouterr().out
+        assert captured["require_complete"] is True
+        assert not (tmp_path / "snap.db").exists()
+        assert "snapshot not created: checkpoint partial" in capsys.readouterr().out
 
     def test_invalid_backup_controls_return_usage_failure_without_output(
         self, wal_db, tmp_path, capsys

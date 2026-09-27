@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sqlite-checkpoint"
-version = "0.2.0"
+version = "0.3.0"
 description = "Lightweight SQLite WAL checkpoint manager for long-running Python applications."
 readme = "README.md"
 requires-python = ">=3.11"

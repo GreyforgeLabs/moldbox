@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] - 2026-09-27
+
+### Fixed
+
+- `snapshot --require-complete` now refuses to publish a destination when the preceding WAL checkpoint is partial or busy.
+- Backups use a private `0600` temporary database and fsync the completed file and destination directory around no-clobber publication.
+
+### Changed
+
+- Recommend `backup` for consistent live copies; checkpointing is an optional, separate WAL-maintenance operation.
+- Document the limited meaning of `quick_check` and SHA-256 and include a restore and full-integrity drill.
+
 ## [0.2.0] - 2026-08-28
 
 ### Security
