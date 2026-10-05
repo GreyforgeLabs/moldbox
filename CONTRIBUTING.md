@@ -1,18 +1,20 @@
-# Contributing to sqlite-checkpoint
+# Contributing to moldbox
 
 Thanks for your interest in contributing. This guide covers the process for submitting changes.
 
 ## Getting Started
 
 1. Fork the repository
-2. Clone your fork: `git clone https://github.com/YOUR_USERNAME/sqlite-checkpoint.git`
-3. Run setup: `cd sqlite-checkpoint && ./scripts/setup.sh`
+2. Clone your fork: `git clone https://github.com/YOUR_USERNAME/moldbox.git`
+3. Run setup: `cd moldbox && ./scripts/setup.sh`
 4. Create a branch: `git checkout -b your-feature`
 
 ## Development Workflow
 
 1. Make your changes
-2. Run tests to verify nothing is broken
+2. Run the checks CI runs to verify nothing is broken:
+   `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D warnings`
+   and `cargo test --locked`
 3. Commit with clear, descriptive messages (prefer `feat:`, `fix:`, `docs:` prefixes)
 4. Push to your fork and open a Pull Request
 
@@ -36,7 +38,8 @@ chore: update dependencies
 
 ## Code Standards
 
-- Follow the existing code style in the repository
+- Follow the existing code style in the repository (`cargo fmt`)
+- Keep CLI output, JSON keys and exit codes stable; they are part of the interface
 - Write tests for new functionality
 - Update documentation for user-facing changes
 - No secrets, credentials, or internal paths in your code

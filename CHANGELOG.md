@@ -4,6 +4,31 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] - 2026-10-05
+
+### Changed
+
+- Renamed the project from sqlite-checkpoint to **moldbox**: the command is `moldbox`, the crate and library are `moldbox`, and the repository is `GreyforgeLabs/moldbox`. Releases up to 0.3.0 were published as sqlite-checkpoint. A deprecated `sqlite-checkpoint` command is still installed for this release; it prints `sqlite-checkpoint: renamed to moldbox; this alias will be removed in the next release` to stderr and then behaves exactly like `moldbox`. Help, usage and error texts now name `moldbox`.
+- Rewrote the tool in Rust. The CLI keeps the same subcommands and aliases, flags, defaults, help and usage texts (apart from the program name), argparse-style parsing (option abbreviations, `-mfull`, `--opt=value`, `--`), stdout/stderr content, JSON keys, order and formatting, exit codes (`0`/`1`/`2`/`3`), file modes and publication order (private `0600` temporary file, online backup, `quick_check`, fsync, no-clobber hard link, directory fsync, rollback on post-publish sync failure).
+- The crate also provides a Rust library (`moldbox::{checkpoint, backup, snapshot, db_info}`) equivalent to the former Python API.
+- SQLite is compiled in through rusqlite's `bundled` feature (SQLite 3.51.3), so behaviour no longer depends on the host `libsqlite3` or a Python interpreter. Connections keep the former 5 s busy timeout and `mode=ro`/`mode=rw`/`immutable=1` URIs; backups sleep only when a step reports BUSY/LOCKED, as Python's `Connection.backup` did.
+- Measured on greyarch (Linux x86_64, Ryzen 5 3600, medians of 30 runs, see [docs/benchmarks.md](docs/benchmarks.md)): `--version` 69.2 ms -> 1.1 ms, `info` 70.1 ms -> 1.6 ms, `checkpoint` 67.7 ms -> 1.6 ms, 16 MB `backup` 114.1 ms -> 42.0 ms; peak RSS 21.7-26.6 MB -> 2.9-8.9 MB. The stripped binary is 2.6 MB and needs no interpreter.
+- Replaced the Python packaging, tests and PyPI workflow with Cargo, Rust tests (every former pytest case is ported) and a release workflow that builds a Linux binary. CI also builds and tests with the minimum supported Rust version (1.88).
+
+### Fixed
+
+- `info` now works for databases whose file name has no extension (for example `appdata` or `.hidden`). The Python version failed with `error: Invalid suffix '-wal'` (exit 2); the WAL file is always `<database>-wal`.
+- Paths that are not valid UTF-8 are supported. The Python version failed with a `UnicodeEncodeError` (exit 2) while building the SQLite URI. Text output prints such paths as raw bytes; JSON escapes undecodable bytes as `\udcXX`, the form Python's `surrogateescape` used.
+
+### Intentional deviations
+
+- A `--pages-per-step` value above 2147483647 still fails with exit code 2 and no destination, but the message is now `pages_per_step must be at most 2147483647` instead of `Python int too large to convert to C int`.
+- Help and usage texts are always wrapped at 80 columns and never coloured. Python 3.14's argparse wrapped them to the terminal width or to `$COLUMNS` (even when piped) and coloured them on a TTY; the texts are identical when output is not a terminal and `$COLUMNS` is unset.
+- SHA-256 digests (and header bytes 96-99) of new backups record the bundled SQLite version, so they differ from digests that the Python tool produced for the same data with another `libsqlite3`. The rest of the file is identical.
+- SIGINT, SIGTERM and SIGHUP during a backup are handled like Python's `KeyboardInterrupt`: the private `.NAME.tmp-XXXXXXXX` file (and its journal) is removed, a name published moments earlier is rolled back, `error: interrupted by SIGINT` (or `SIGTERM`/`SIGHUP`) is printed and the process terminates by the same signal. Python printed a traceback instead, and left the temporary file behind on SIGTERM or SIGHUP.
+- Messages that come from SQLite itself are those of the bundled SQLite 3.51.3 and can differ from what a newer host `libsqlite3` reported. For example, backing up one corrupt database reported `database disk image is malformed` with the host's SQLite 3.53.4 but a `SQLite quick_check failed for temporary backup: (...)` report with the bundled library. The exit code (`2`) and the guarantee that nothing is published are the same.
+- If writing to stdout fails (for example a closed pipe), the tool prints `error: <reason>` and exits 120. Python also exited 120 but printed an "Exception ignored" message.
+
 ## [0.3.0] - 2026-09-27
 
 ### Fixed

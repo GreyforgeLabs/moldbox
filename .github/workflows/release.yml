@@ -13,34 +13,39 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          python-version: "3.12"
-      - name: Validate tag matches project version
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Validate tag matches crate version
         run: |
           TAG_VERSION="${GITHUB_REF_NAME#v}"
-          PROJECT_VERSION="$(python - <<'PY'
-          import tomllib
-          with open("pyproject.toml", "rb") as handle:
-              data = tomllib.load(handle)
-          print(data["project"]["version"])
-          PY
-          )"
+          CRATE_VERSION="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json, sys; print(json.load(sys.stdin)["packages"][0]["version"])')"
 
-          if [ "$TAG_VERSION" != "$PROJECT_VERSION" ]; then
-            echo "Tag version $TAG_VERSION does not match project.version $PROJECT_VERSION"
+          if [ "$TAG_VERSION" != "$CRATE_VERSION" ]; then
+            echo "Tag version $TAG_VERSION does not match Cargo.toml version $CRATE_VERSION"
             exit 1
           fi
-      - run: python -m pip install --upgrade pip
-      - run: python -m pip install -e ".[dev]"
-      - run: python -m ruff check .
-      - run: python -m pytest
-      - run: python -m build
-      - run: python -m twine check dist/*
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets --all-features -- -D warnings
+      - run: cargo test --locked
+      - run: cargo build --release --locked
+      - name: Package release binary
+        run: |
+          NAME="moldbox-${GITHUB_REF_NAME}-x86_64-unknown-linux-gnu"
+          mkdir -p "dist/$NAME"
+          cp target/release/moldbox README.md LICENSE CHANGELOG.md "dist/$NAME/"
+          # Deprecated alias for the former name (prints a deprecation note,
+          # then behaves like moldbox); shipped for this release only.
+          cp target/release/sqlite-checkpoint "dist/$NAME/"
+          tar -C dist -czf "dist/$NAME.tar.gz" "$NAME"
+          (cd dist && sha256sum "$NAME.tar.gz" > "$NAME.tar.gz.sha256")
+          rm -rf "dist/$NAME"
       - uses: actions/upload-artifact@v7.0.0
         with:
           name: dist
           path: dist/*
+          if-no-files-found: error
 
   github-release:
     needs: build

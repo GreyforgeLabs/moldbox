@@ -27,7 +27,7 @@ node_modules/
 npm-debug.log*
 
 # Rust
-target/
+/target
 
 # IDE
 .vscode/

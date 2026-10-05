@@ -6,55 +6,63 @@
 ## Quick Bootstrap
 
 ```bash
-git clone https://github.com/GreyforgeLabs/sqlite-checkpoint.git && cd sqlite-checkpoint && ./scripts/setup.sh
+git clone https://github.com/GreyforgeLabs/moldbox.git && cd moldbox && ./scripts/setup.sh
 ```
 
 ## What This Project Does
 
-SQLite online backup and WAL checkpoint tool. Use `backup` for a consistent live copy; checkpointing is optional WAL maintenance. The CLI and Python library have no runtime Python dependencies. Test a restore before relying on a backup.
+moldbox (formerly sqlite-checkpoint) is a SQLite online backup and WAL checkpoint tool, written in Rust. Use `backup` for a consistent live copy; checkpointing is optional WAL maintenance. SQLite is compiled into the binary (rusqlite `bundled`), so there are no runtime dependencies. The crate also exposes a Rust library API. Test a restore before relying on a backup.
 
 ## Project Structure
 
 ```text
-sqlite-checkpoint/
-  src/sqlite_checkpoint/
-    __init__.py         # package version
-    core.py             # checkpoint, backup, snapshot, db_info logic
-    cli.py              # argparse CLI entry point
-    __main__.py         # python -m sqlite_checkpoint support
+moldbox/
+  src/
+    lib.rs              # library API: checkpoint, backup, snapshot, db_info
+    cli.rs              # command dispatch and text/JSON output
+    argparse.rs         # argparse-compatible command-line parsing
+    help.rs             # help and usage texts
+    pyfmt.rs            # output-compatibility helpers (repr, JSON, floats)
+    printable.rs        # Python str.isprintable() table used by repr()
+    main.rs             # `moldbox` binary entry point
+    bin/sqlite-checkpoint.rs  # deprecated alias binary (removed next release)
+    tests.rs            # library unit tests
+    cli/tests.rs        # CLI unit tests
   tests/
-    test_core.py        # unit tests for core functions
-    test_cli.py         # CLI integration tests
+    cli.rs              # end-to-end binary tests (+ optional differential test)
   scripts/
-    setup.sh            # idempotent install script
-  .github/workflows/    # CI, release, and PyPI publish workflows
+    setup.sh            # idempotent build and verification script
+  docs/
+    benchmarks.md       # Rust vs. Python measurements
+  .github/workflows/    # CI and release workflows
   README.md             # human-facing docs
   STARTHERE.md          # this file
 ```
 
 ## Setup Prerequisites
 
-- Python 3.11+
-- No system dependencies required (uses stdlib `sqlite3`)
+- Rust 1.88+ with `cargo` and the `rustfmt`/`clippy` components
+- A C compiler (`cc`) to build the bundled SQLite
 
 ## Installation Steps
 
-1. Clone: `git clone https://github.com/GreyforgeLabs/sqlite-checkpoint.git`
-2. Enter directory: `cd sqlite-checkpoint`
+1. Clone: `git clone https://github.com/GreyforgeLabs/moldbox.git`
+2. Enter directory: `cd moldbox`
 3. Run setup: `./scripts/setup.sh`
+4. Optional install: `cargo install --path .`
 
 ## Verification
 
 ```bash
-source .venv/bin/activate
-sqlite-checkpoint --version
-# Expected output: sqlite-checkpoint 0.3.0
+cargo run --locked --quiet -- --version
+# Expected output: moldbox 0.4.0
 ```
 
 ## Key Entry Points
 
-- `src/sqlite_checkpoint/cli.py` — CLI entry point (`sqlite-checkpoint` command)
-- `src/sqlite_checkpoint/core.py` — Python API (`checkpoint`, `backup`, `snapshot`, `db_info`)
+- `src/main.rs` / `src/cli.rs` — CLI entry point (`moldbox` command)
+- `src/bin/sqlite-checkpoint.rs` — deprecated `sqlite-checkpoint` alias: prints a deprecation note to stderr, then runs `moldbox`
+- `src/lib.rs` — Rust API (`checkpoint`, `backup`, `snapshot`, `db_info`)
 
 ## Configuration
 
@@ -64,14 +72,14 @@ No configuration files or environment variables required. All options are passed
 
 ```bash
 # Run tests
-python -m pytest
+cargo test --locked
 
-# Run linter
-python -m ruff check .
+# Lint
+cargo clippy --all-targets --all-features -- -D warnings
 
 # Format code
-python -m ruff format .
+cargo fmt
 
-# Build distribution
-python -m build
+# Build an optimized binary
+cargo build --release --locked
 ```
