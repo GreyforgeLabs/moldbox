@@ -15,7 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Changed
 
-- The private temporary database is written with `journal_mode=OFF` and `synchronous=OFF`. It is discarded on any failure and still passes `quick_check` and an explicit fsync before publication, so the rollback journal and SQLite's commit-time syncs were redundant work. Measured on greyarch (btrfs on SSD, load average about 14 on 12 threads, medians of two interleaved series): a 16 MB backup takes 80-84 ms instead of 103-123 ms and a 100 MB backup 369-371 ms instead of 406-442 ms.
+- The private temporary database is written with `journal_mode=OFF` and `synchronous=OFF`. It is discarded on any failure and still passes `quick_check` and an explicit fsync before publication, so the rollback journal and SQLite's commit-time syncs were redundant work. Measured on btrfs on SSD (Linux x86_64, load average about 14 on 12 threads, medians of two interleaved series): a 16 MB backup takes 80-84 ms instead of 103-123 ms and a 100 MB backup 369-371 ms instead of 406-442 ms.
 - `elapsed_ms` of a backup now also covers hashing, which runs before publication.
 
 ## [0.4.0] - 2026-10-05
