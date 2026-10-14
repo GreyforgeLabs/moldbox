@@ -302,7 +302,9 @@ impl Default for SnapshotOptions {
 pub enum Error {
     /// A path did not exist or failed source validation (exit code 1).
     NotFound(String),
-    /// The destination (or a temporary name) already exists (exit code 1).
+    /// The destination (or a temporary name) already exists, or the
+    /// destination names a `-wal`/`-shm`/`-journal` file of the source
+    /// (exit code 1).
     AlreadyExists(String),
     /// Invalid control values (exit code 2).
     InvalidArgument(String),
@@ -725,11 +727,15 @@ fn quick_check(path: &Path, hooks: &Hooks<'_>) -> Result<()> {
     }
 }
 
-fn sha256_file(path: &Path) -> Result<String> {
+/// Size in bytes and lower-case hexadecimal SHA-256 of `path`, checking for
+/// a pending termination signal between chunks.
+fn sha256_file(path: &Path) -> Result<(u64, String)> {
     let mut file = File::open(path).map_err(|err| os_error(&err, Some(path), None))?;
     let mut hasher = Sha256::new();
     let mut buf = vec![0u8; 1 << 16];
+    let mut size: u64 = 0;
     loop {
+        check_interrupt()?;
         let n = match file.read(&mut buf) {
             Ok(0) => break,
             Ok(n) => n,
@@ -737,12 +743,14 @@ fn sha256_file(path: &Path) -> Result<String> {
             Err(err) => return Err(os_error(&err, None, None)),
         };
         hasher.update(&buf[..n]);
+        size += n as u64;
     }
-    Ok(hasher
-        .finalize()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect())
+    let mut hex = String::with_capacity(64);
+    for byte in hasher.finalize() {
+        hex.push(char::from(b"0123456789abcdef"[usize::from(byte >> 4)]));
+        hex.push(char::from(b"0123456789abcdef"[usize::from(byte & 0xf)]));
+    }
+    Ok((size, hex))
 }
 
 /// Copy `source` into `dest` with `sqlite3_backup_step`, sleeping only when a
@@ -796,7 +804,7 @@ fn copy_validate_publish(
     options: &BackupOptions,
     hooks: &Hooks<'_>,
     published: &mut bool,
-) -> Result<()> {
+) -> Result<(u64, String)> {
     let source = connect_existing(identity, true, false, hooks)?;
     let mut dest = open_connection(
         tmp_path.as_os_str(),
@@ -804,21 +812,66 @@ fn copy_validate_publish(
             | OpenFlags::SQLITE_OPEN_CREATE
             | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )?;
+    // The temporary file is private, discarded on any failure, and checked
+    // and fsynced explicitly before publication. SQLite's rollback journal
+    // and commit-time syncs would only add a second write of every page and
+    // extra fsyncs, so the copy runs without them.
+    dest.query_row("PRAGMA journal_mode=OFF", [], |_| Ok(()))
+        .map_err(sqlite_error)?;
+    dest.execute_batch("PRAGMA synchronous=OFF")
+        .map_err(sqlite_error)?;
     run_online_backup(&source, &mut dest, options.pages_per_step, options.pause_ms)?;
     close_connection(dest)?;
     close_connection(source)?;
     quick_check(tmp_path, hooks)?;
     check_interrupt()?;
     fsync_file(tmp_path, hooks)?;
+    // Fingerprint the synced temporary file, so that nothing slow runs after
+    // publication and a signal during hashing still publishes nothing. The
+    // destination is a hard link to these exact bytes.
+    let fingerprint = sha256_file(tmp_path)?;
     check_interrupt()?;
     // Atomic no-clobber publish: link succeeds only if dest_path does not exist.
     fs::hard_link(tmp_path, dest_path)
         .map_err(|err| os_error(&err, Some(tmp_path), Some(dest_path)))?;
     *published = true;
+    // Drop the temporary name first: the one directory sync below then makes
+    // both the new name and the removal durable, so a crash cannot leave a
+    // second link to the backup behind.
+    let _ = fs::remove_file(tmp_path);
     fsync_directory(dest_parent, hooks)?;
     // A signal that arrived while publishing rolls the new name back, as the
     // original rolled back on KeyboardInterrupt inside its try block.
-    check_interrupt()
+    check_interrupt()?;
+    Ok(fingerprint)
+}
+
+/// Refuse a destination that names the source's own `-wal`, `-shm` or
+/// `-journal` file. A backup published there would later be taken for (and
+/// reset or deleted as) the source's write-ahead log, shared-memory index or
+/// rollback journal.
+fn reject_sidecar_destination(
+    source: &Path,
+    dest_path: &Path,
+    name: &OsStr,
+    parent: &Path,
+) -> Result<()> {
+    let Ok(parent) = fs::canonicalize(parent) else {
+        // A missing or unreadable directory is reported by the temp-file step.
+        return Ok(());
+    };
+    let candidate = parent.join(name);
+    for suffix in ["-wal", "-shm", "-journal"] {
+        let mut sidecar = source.as_os_str().to_os_string();
+        sidecar.push(suffix);
+        if candidate.as_os_str() == sidecar {
+            return Err(Error::AlreadyExists(format!(
+                "Destination is the {suffix} file of the source database: {}",
+                shown(dest_path)
+            )));
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn backup_with(
@@ -831,7 +884,9 @@ pub(crate) fn backup_with(
     let identity = validated_existing_database_path(&normalized(db_path))?;
     let dest_path = normalized(dest_path);
 
-    if fs::metadata(&dest_path).is_ok() {
+    // lstat: a dangling symlink also occupies the name and would make the
+    // final no-clobber link fail only after the whole copy.
+    if fs::symlink_metadata(&dest_path).is_ok() {
         return Err(Error::AlreadyExists(format!(
             "Destination already exists: {}",
             shown(&dest_path)
@@ -840,6 +895,7 @@ pub(crate) fn backup_with(
 
     let (name, parent) = pyfmt::pathlib_split(dest_path.as_os_str());
     let parent = PathBuf::from(parent);
+    reject_sidecar_destination(&identity.path, &dest_path, &name, &parent)?;
     let mut prefix = b".".to_vec();
     prefix.extend_from_slice(name.as_bytes());
     prefix.extend_from_slice(b".tmp-");
@@ -856,23 +912,20 @@ pub(crate) fn backup_with(
         hooks,
         &mut published,
     );
-    if let Err(err) = outcome {
-        if published {
-            // Best-effort rollback after a post-publish sync failure. The
-            // caller must inspect the destination if this cleanup also fails.
-            let _ = fs::remove_file(&dest_path);
-            let _ = fsync_directory(&parent, hooks);
+    let (size_bytes, sha256) = match outcome {
+        Ok(fingerprint) => fingerprint,
+        Err(err) => {
+            if published {
+                // Best-effort rollback after a post-publish sync failure. The
+                // caller must inspect the destination if this cleanup also fails.
+                let _ = fs::remove_file(&dest_path);
+                let _ = fsync_directory(&parent, hooks);
+            }
+            let _ = fs::remove_file(&tmp_path);
+            return Err(err);
         }
-        let _ = fs::remove_file(&tmp_path);
-        return Err(err);
-    }
-    let _ = fs::remove_file(&tmp_path);
-
+    };
     let elapsed = elapsed_ms(start);
-    let size_bytes = fs::metadata(&dest_path)
-        .map_err(|err| os_error(&err, Some(&dest_path), None))?
-        .len();
-    let sha256 = sha256_file(&dest_path)?;
     Ok(BackupResult {
         source: identity.path,
         destination: dest_path,

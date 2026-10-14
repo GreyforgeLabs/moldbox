@@ -77,8 +77,10 @@ moldbox --json backup myapp.db /backups/snap.db
 
 Source databases are opened in SQLite `mode=ro` or `mode=rw`; missing files are
 never created. The opened file identity and schema are verified before backup.
-The temporary database is checked and synced before no-clobber publication;
-the destination directory is synced afterward. Errors before publication leave
+The temporary database is written without a rollback journal, then checked,
+synced and fingerprinted before no-clobber publication; the temporary name is
+removed and the destination directory is synced afterward, so one directory
+sync records the final state. Errors before publication leave
 no destination. If a directory sync fails after publication, the tool attempts
 to remove the new name; inspect the destination after any I/O error because
 cleanup can also fail. If the tool receives SIGINT, SIGTERM or SIGHUP during a
@@ -93,7 +95,7 @@ code `3` **without creating the destination**. The JSON result has
 | Code | Meaning |
 |------|---------|
 | `0` | Success |
-| `1` | Missing or unsafe source database, missing destination directory, or the destination already exists |
+| `1` | Missing or unsafe source database, missing destination directory, the destination already exists (including a dangling symlink), or the destination names the source's own `-wal`, `-shm` or `-journal` file |
 | `2` | Usage error, invalid control value, SQLite or other I/O error |
 | `3` | `--require-complete` and the checkpoint was busy or partial |
 

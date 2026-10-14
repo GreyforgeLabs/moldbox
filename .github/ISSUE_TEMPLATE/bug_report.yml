@@ -35,7 +35,7 @@ body:
       placeholder: |
         - OS: Ubuntu 24.04
         - Rust (if built from source): 1.88
-        - Tool version (moldbox --version): 0.4.0
+        - Tool version (moldbox --version): 0.4.1
     validations:
       required: false
 

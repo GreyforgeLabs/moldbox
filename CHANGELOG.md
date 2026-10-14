@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.1] - 2026-10-14
+
+### Fixed
+
+- `backup` and `snapshot` refuse a destination that names the source's own `-wal`, `-shm` or `-journal` file (exit code `1`, `Destination is the -journal file of the source database: ...`). SQLite treats such a file as the source's write-ahead log, shared-memory index or rollback journal, so a backup published under that name would be reset or deleted by the next application that opens the source.
+- A destination that is a dangling symlink is now reported as `Destination already exists` (exit code `1`) before the source is opened, instead of after a full copy when the final no-clobber link failed.
+- The SHA-256 fingerprint and size are now computed from the synced temporary file before publication. A SIGINT, SIGTERM or SIGHUP that arrives while a large backup is being hashed therefore removes the temporary file and publishes nothing, as documented; previously hashing ran after publication.
+- The temporary name is removed before the destination directory is synced, so a single directory sync makes both the new name and the removal durable and a crash cannot leave a second link to the backup behind.
+
+### Changed
+
+- The private temporary database is written with `journal_mode=OFF` and `synchronous=OFF`. It is discarded on any failure and still passes `quick_check` and an explicit fsync before publication, so the rollback journal and SQLite's commit-time syncs were redundant work. Measured on greyarch (btrfs on SSD, load average about 14 on 12 threads, medians of two interleaved series): a 16 MB backup takes 80-84 ms instead of 103-123 ms and a 100 MB backup 369-371 ms instead of 406-442 ms.
+- `elapsed_ms` of a backup now also covers hashing, which runs before publication.
+
 ## [0.4.0] - 2026-10-05
 
 ### Changed

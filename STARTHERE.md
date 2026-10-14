@@ -55,7 +55,7 @@ moldbox/
 
 ```bash
 cargo run --locked --quiet -- --version
-# Expected output: moldbox 0.4.0
+# Expected output: moldbox 0.4.1
 ```
 
 ## Key Entry Points

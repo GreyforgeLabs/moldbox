@@ -114,7 +114,17 @@ fn test_basic_backup() {
         0o600
     );
     assert_eq!(result.destination, dest);
-    assert_eq!(result.sha256, sha256_file(&dest).unwrap());
+    let bytes = fs::read(&dest).unwrap();
+    let expected: String = Sha256::digest(&bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    assert_eq!(result.sha256, expected);
+    assert_eq!(result.size_bytes, bytes.len() as u64);
+    assert_eq!(
+        sha256_file(&dest).unwrap(),
+        (result.size_bytes, result.sha256)
+    );
 }
 
 #[test]
@@ -647,4 +657,114 @@ fn interruptible_sleep_completes_without_a_signal() {
     let start = Instant::now();
     interruptible_sleep(Duration::from_millis(30)).unwrap();
     assert!(start.elapsed() >= Duration::from_millis(30));
+}
+
+// --- Sweep 2026-10-14 regressions ----------------------------------------
+
+#[test]
+fn backup_refuses_the_sources_sidecar_names() {
+    let (dir, db) = wal_db();
+    let before = fs::read(&db).unwrap();
+    for suffix in ["-wal", "-shm", "-journal"] {
+        // Reached both directly and through a relative `..` spelling.
+        let direct = dir.path().join(format!("test.db{suffix}"));
+        let sub = dir.path().join("sub");
+        fs::create_dir_all(&sub).unwrap();
+        let indirect = sub.join(format!("../test.db{suffix}"));
+        for dest in [&direct, &indirect] {
+            let err = backup(&db, dest, &BackupOptions::default()).unwrap_err();
+            assert!(matches!(err, Error::AlreadyExists(_)), "{err:?}");
+            assert_eq!(err.exit_code(), 1);
+            assert!(
+                err.to_string()
+                    .starts_with(&format!("Destination is the {suffix} file")),
+                "{err}"
+            );
+            assert!(!direct.exists());
+            let err = snapshot(&db, dest, &SnapshotOptions::default()).unwrap_err();
+            assert_eq!(err.exit_code(), 1);
+            assert!(!direct.exists());
+        }
+        assert!(temp_leftovers(dir.path(), ".test.db").is_empty());
+    }
+    assert_eq!(fs::read(&db).unwrap(), before);
+    // Other names next to the source are still fine.
+    backup(
+        &db,
+        dir.path().join("test.db-backup"),
+        &BackupOptions::default(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn backup_refuses_a_dangling_symlink_destination_before_copying() {
+    let (dir, db) = wal_db();
+    let dest = dir.path().join("backup.db");
+    std::os::unix::fs::symlink(dir.path().join("missing-target"), &dest).unwrap();
+    let connected = Cell::new(false);
+    let mark = |_: &str| connected.set(true);
+    let hooks = Hooks {
+        before_connect: Some(&mark),
+        ..Hooks::default()
+    };
+    let err = backup_with(&db, &dest, &BackupOptions::default(), &hooks).unwrap_err();
+    assert!(matches!(err, Error::AlreadyExists(_)), "{err:?}");
+    assert!(
+        err.to_string().starts_with("Destination already exists: "),
+        "{err}"
+    );
+    assert!(!connected.get(), "no source connection may be opened");
+    assert!(
+        fs::symlink_metadata(&dest)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert!(!dir.path().join("missing-target").exists());
+    assert!(temp_leftovers(dir.path(), ".backup.db.tmp-").is_empty());
+}
+
+#[test]
+fn backup_of_rollback_journal_database_with_large_pages_is_complete() {
+    let dir = TempDir::new().unwrap();
+    let db = dir.path().join("big-pages.db");
+    let conn = Connection::open(&db).unwrap();
+    conn.execute_batch(
+        "PRAGMA page_size=65536;
+         PRAGMA journal_mode=DELETE;
+         CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT);
+         CREATE INDEX items_name ON items(name);
+         WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 5000)
+         INSERT INTO items (name) SELECT printf('row-%06d', i) FROM n;",
+    )
+    .unwrap();
+    conn.close().unwrap();
+    let dest = dir.path().join("copy.db");
+    let options = BackupOptions {
+        pages_per_step: 1,
+        pause_ms: 0.0,
+    };
+    let result = backup(&db, &dest, &options).unwrap();
+    assert_eq!(result.size_bytes, fs::metadata(&db).unwrap().len());
+    let copy = Connection::open(&dest).unwrap();
+    let check: String = copy
+        .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(check, "ok");
+    let (pages, rows): (i64, i64) = (
+        copy.query_row("PRAGMA page_size", [], |row| row.get(0))
+            .unwrap(),
+        copy.query_row("SELECT count(*) FROM items", [], |row| row.get(0))
+            .unwrap(),
+    );
+    assert_eq!((pages, rows), (65536, 5000));
+    // The temporary database ran without a rollback journal.
+    let mut entries: Vec<String> = fs::read_dir(dir.path())
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    entries.sort();
+    assert_eq!(entries, ["big-pages.db", "copy.db"]);
 }
