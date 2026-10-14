@@ -836,8 +836,9 @@ fn copy_validate_publish(
         .map_err(|err| os_error(&err, Some(tmp_path), Some(dest_path)))?;
     *published = true;
     // Drop the temporary name first: the one directory sync below then makes
-    // both the new name and the removal durable, so a crash cannot leave a
-    // second link to the backup behind.
+    // both the new name and the removal durable, so a crash after success is
+    // reported cannot leave a second link to the backup behind. A crash before
+    // that sync may leave either name (or both), but success is not reported.
     let _ = fs::remove_file(tmp_path);
     fsync_directory(dest_parent, hooks)?;
     // A signal that arrived while publishing rolls the new name back, as the

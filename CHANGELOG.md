@@ -11,7 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 - `backup` and `snapshot` refuse a destination that names the source's own `-wal`, `-shm` or `-journal` file (exit code `1`, `Destination is the -journal file of the source database: ...`). SQLite treats such a file as the source's write-ahead log, shared-memory index or rollback journal, so a backup published under that name would be reset or deleted by the next application that opens the source.
 - A destination that is a dangling symlink is now reported as `Destination already exists` (exit code `1`) before the source is opened, instead of after a full copy when the final no-clobber link failed.
 - The SHA-256 fingerprint and size are now computed from the synced temporary file before publication. A SIGINT, SIGTERM or SIGHUP that arrives while a large backup is being hashed therefore removes the temporary file and publishes nothing, as documented; previously hashing ran after publication.
-- The temporary name is removed before the destination directory is synced, so a single directory sync makes both the new name and the removal durable and a crash cannot leave a second link to the backup behind.
+- The temporary name is removed before the destination directory is synced, so the single directory sync makes both the new name and the removal durable. Once a backup is reported complete, a crash can no longer leave the hidden temporary link behind; previously its removal was never synced.
 
 ### Changed
 

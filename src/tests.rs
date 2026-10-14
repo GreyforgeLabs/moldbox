@@ -768,3 +768,24 @@ fn backup_of_rollback_journal_database_with_large_pages_is_complete() {
     entries.sort();
     assert_eq!(entries, ["big-pages.db", "copy.db"]);
 }
+
+#[test]
+fn backup_refuses_sidecar_names_reached_through_a_symlinked_directory() {
+    let (dir, db) = wal_db();
+    let alias = dir.path().join("alias");
+    std::os::unix::fs::symlink(dir.path(), &alias).unwrap();
+    // Source named through the alias, destination through the real directory,
+    // and the reverse: SQLite resolves both to the same sidecar file.
+    for (source, dest) in [
+        (alias.join("test.db"), dir.path().join("test.db-journal")),
+        (db.clone(), alias.join("test.db-wal")),
+        (db.clone(), alias.join("sub/../test.db-shm")),
+    ] {
+        fs::create_dir_all(dir.path().join("sub")).unwrap();
+        let err = backup(&source, &dest, &BackupOptions::default()).unwrap_err();
+        assert!(matches!(err, Error::AlreadyExists(_)), "{err:?}");
+        assert!(err.to_string().starts_with("Destination is the -"), "{err}");
+        assert!(fs::symlink_metadata(&dest).is_err());
+    }
+    assert!(temp_leftovers(dir.path(), ".test.db").is_empty());
+}
