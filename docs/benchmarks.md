@@ -1,6 +1,6 @@
 # Benchmarks: moldbox 0.4.0 (Rust) vs. sqlite-checkpoint 0.3.0 (Python)
 
-Measured on 2026-10-05 on **greyarch** (Linux 7.2.5 x86_64, AMD Ryzen 5 3600,
+Measured on 2026-10-05 on a desktop workstation (Linux 7.2.5 x86_64, AMD Ryzen 5 3600,
 12 threads, 16 GB RAM).
 
 - Rust: `target/release/moldbox` built with `cargo build --release --locked`
