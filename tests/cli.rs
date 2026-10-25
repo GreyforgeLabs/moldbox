@@ -465,7 +465,7 @@ fn differential_against_python_reference() {
 }
 
 const ALIAS_NOTE: &str =
-    "sqlite-checkpoint: renamed to moldbox; this alias will be removed in the next release\n";
+    "sqlite-checkpoint: renamed to moldbox; this alias will be removed in a future release\n";
 
 #[test]
 fn deprecated_alias_prints_note_then_behaves_like_moldbox() {

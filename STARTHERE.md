@@ -25,7 +25,7 @@ moldbox/
     pyfmt.rs            # output-compatibility helpers (repr, JSON, floats)
     printable.rs        # Python str.isprintable() table used by repr()
     main.rs             # `moldbox` binary entry point
-    bin/sqlite-checkpoint.rs  # deprecated alias binary (removed next release)
+    bin/sqlite-checkpoint.rs  # deprecated alias binary (to be removed in a future release)
     tests.rs            # library unit tests
     cli/tests.rs        # CLI unit tests
   tests/

@@ -21,11 +21,10 @@ SQLite's online backup API already creates consistent copies of a live database,
 
 moldbox was released as `sqlite-checkpoint` up to v0.3.0 and renamed in 0.4.0.
 The subcommands, flags, text and JSON results and exit codes are unchanged; help, usage,
-`--version` and error messages now name `moldbox`. For this release a
-deprecated `sqlite-checkpoint` command is still installed alongside `moldbox`:
-it prints a one-line deprecation note to stderr and then behaves exactly like
-`moldbox`. It will be removed in the next release, so update scripts to call
-`moldbox`.
+`--version` and error messages now name `moldbox`. A deprecated
+`sqlite-checkpoint` command is still installed alongside `moldbox`: it prints a
+one-line deprecation note to stderr and then behaves exactly like `moldbox`.
+It will be removed in a future release, so update scripts to call `moldbox`.
 
 ## Quick Start
 
