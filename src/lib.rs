@@ -884,9 +884,31 @@ struct PreparedDestination {
 }
 
 impl PreparedDestination {
+    /// Repeats the destination checks against `source`, for a caller that
+    /// waited between preparing the destination and copying into it: the
+    /// name may have been taken meanwhile, or the source path may now resolve
+    /// to a database whose sidecar file the destination names.
+    fn recheck(&self, source: &Path) -> Result<()> {
+        ensure_destination_free(&self.dest_path)?;
+        let (name, _) = pyfmt::pathlib_split(self.dest_path.as_os_str());
+        reject_sidecar_destination(source, &self.dest_path, &name, &self.parent)
+    }
+
     fn discard(self) {
         let _ = fs::remove_file(&self.tmp_path);
     }
+}
+
+/// lstat: a dangling symlink also occupies the name and would make the final
+/// no-clobber link fail only after the whole copy.
+fn ensure_destination_free(dest_path: &Path) -> Result<()> {
+    if fs::symlink_metadata(dest_path).is_ok() {
+        return Err(Error::AlreadyExists(format!(
+            "Destination already exists: {}",
+            shown(dest_path)
+        )));
+    }
+    Ok(())
 }
 
 /// Checks that `dest_path` is free and is not one of the source's sidecar
@@ -894,15 +916,7 @@ impl PreparedDestination {
 /// also reports a missing or unwritable directory).
 fn prepare_destination(source: &Path, dest_path: &Path) -> Result<PreparedDestination> {
     let dest_path = normalized(dest_path);
-
-    // lstat: a dangling symlink also occupies the name and would make the
-    // final no-clobber link fail only after the whole copy.
-    if fs::symlink_metadata(&dest_path).is_ok() {
-        return Err(Error::AlreadyExists(format!(
-            "Destination already exists: {}",
-            shown(&dest_path)
-        )));
-    }
+    ensure_destination_free(&dest_path)?;
 
     let (name, parent) = pyfmt::pathlib_split(dest_path.as_os_str());
     let parent = PathBuf::from(parent);
@@ -1001,9 +1015,12 @@ pub(crate) fn snapshot_with(
             return Err(err);
         }
     };
-    // Validate the source again: the backup must copy the file that is at
-    // the path now.
-    let identity = match validated_existing_database_path(&normalized(db_path)) {
+    // Validate the source and the destination again: the backup must copy
+    // the file that is at the path now, and the checks made before the
+    // checkpoint must still hold for it.
+    let identity = match validated_existing_database_path(&normalized(db_path))
+        .and_then(|identity| prepared.recheck(&identity.path).map(|()| identity))
+    {
         Ok(identity) => identity,
         Err(err) => {
             prepared.discard();

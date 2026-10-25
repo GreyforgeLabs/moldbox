@@ -858,3 +858,61 @@ fn snapshot_removes_its_temporary_file_when_the_checkpoint_fails() {
     assert!(!dest.exists());
     assert!(temp_leftovers(dir.path(), ".snap.db.tmp-").is_empty());
 }
+
+#[test]
+fn snapshot_rechecks_the_destination_after_the_checkpoint() {
+    let dir = TempDir::new().unwrap();
+    let root = fs::canonicalize(dir.path()).unwrap();
+    let (_first_dir, first) = wal_db();
+    let (_second_dir, second) = wal_db();
+    for (sub, db) in [("a", &first), ("b", &second)] {
+        fs::create_dir(root.join(sub)).unwrap();
+        fs::copy(db, root.join(sub).join("test.db")).unwrap();
+    }
+    let current = root.join("current");
+    let source = current.join("test.db");
+    let options = SnapshotOptions::default();
+
+    // The source path is re-pointed while the checkpoint runs, so that the
+    // destination now names the -journal file of the database being copied.
+    std::os::unix::fs::symlink(root.join("a"), &current).unwrap();
+    let repoint = |_: &Path, mode: CheckpointMode| -> Result<CheckpointResult> {
+        fs::remove_file(&current).unwrap();
+        std::os::unix::fs::symlink(root.join("b"), &current).unwrap();
+        Ok(result(mode, false, 0, 0))
+    };
+    let hooks = Hooks {
+        checkpoint: Some(&repoint),
+        ..Hooks::default()
+    };
+    let sidecar = root.join("b").join("test.db-journal");
+    let err = snapshot_with(&source, &sidecar, &options, &hooks).unwrap_err();
+    assert_eq!(err.exit_code(), 1, "{err:?}");
+    assert!(
+        err.to_string()
+            .starts_with("Destination is the -journal file of the source database: "),
+        "{err}"
+    );
+    assert!(fs::symlink_metadata(&sidecar).is_err());
+    assert!(temp_leftovers(&root.join("b"), ".").is_empty());
+
+    // The destination name is taken while the checkpoint runs: reported as
+    // before the checkpoint, without copying, and the new file is kept.
+    let dest = root.join("snap.db");
+    let take = |_: &Path, mode: CheckpointMode| -> Result<CheckpointResult> {
+        fs::write(&dest, b"keep").unwrap();
+        Ok(result(mode, false, 0, 0))
+    };
+    let hooks = Hooks {
+        checkpoint: Some(&take),
+        ..Hooks::default()
+    };
+    let err = snapshot_with(&source, &dest, &options, &hooks).unwrap_err();
+    assert_eq!(err.exit_code(), 1, "{err:?}");
+    assert!(
+        err.to_string().starts_with("Destination already exists: "),
+        "{err}"
+    );
+    assert_eq!(fs::read(&dest).unwrap(), b"keep");
+    assert!(temp_leftovers(&root, ".").is_empty());
+}
