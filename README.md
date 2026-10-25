@@ -86,6 +86,8 @@ to remove the new name; inspect the destination after any I/O error because
 cleanup can also fail. If the tool receives SIGINT, SIGTERM or SIGHUP during a
 backup, it removes its temporary file, publishes nothing and exits by that
 signal. These guarantees depend on the underlying filesystem.
+`snapshot` checks the destination before it runs the checkpoint, so a
+destination that cannot be used is reported without touching the source.
 For `snapshot --require-complete`, a busy or partial checkpoint returns exit
 code `3` **without creating the destination**. The JSON result has
 `"backup": null` and `"published": false` in that case.

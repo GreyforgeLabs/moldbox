@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- `snapshot` checks the destination before it runs the checkpoint. A destination that already exists (including a dangling symlink), names a sidecar file of the source, or lies in a missing or unwritable directory is reported at once, with the same message and exit code as before, and the source is left untouched. Previously the checkpoint ran first: a `-m truncate` snapshot onto an existing name truncated the source's WAL before it failed, and with a reader holding the database open it waited out the 5 s busy timeout before it reported the destination error. When the source is missing as well, `Database not found` is still reported first.
+
 ## [0.4.1] - 2026-10-14
 
 ### Fixed

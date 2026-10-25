@@ -468,6 +468,7 @@ fn test_required_checkpoint_failure_does_not_create_backup() {
         "checkpoint partial; backup was not created"
     );
     assert!(!destination.exists());
+    assert!(temp_leftovers(dir.path(), ".snap.db.tmp-").is_empty());
 }
 
 // --- TestDbInfo -----------------------------------------------------------
@@ -788,4 +789,72 @@ fn backup_refuses_sidecar_names_reached_through_a_symlinked_directory() {
         assert!(fs::symlink_metadata(&dest).is_err());
     }
     assert!(temp_leftovers(dir.path(), ".test.db").is_empty());
+}
+
+#[test]
+fn snapshot_checks_the_destination_before_the_checkpoint() {
+    let (dir, db) = wal_db();
+    let ran = Cell::new(0);
+    let counting = |_: &Path, mode: CheckpointMode| -> Result<CheckpointResult> {
+        ran.set(ran.get() + 1);
+        Ok(result(mode, false, 0, 0))
+    };
+    let hooks = Hooks {
+        checkpoint: Some(&counting),
+        ..Hooks::default()
+    };
+    let options = SnapshotOptions {
+        checkpoint_mode: CheckpointMode::Truncate,
+        ..SnapshotOptions::default()
+    };
+    let existing = dir.path().join("existing.db");
+    fs::write(&existing, b"keep").unwrap();
+    let dangling = dir.path().join("dangling.db");
+    std::os::unix::fs::symlink(dir.path().join("missing-target"), &dangling).unwrap();
+    let sidecar = dir.path().join("test.db-journal");
+    let missing_dir = dir.path().join("missing").join("snap.db");
+
+    for (dest, prefix) in [
+        (&existing, "Destination already exists: "),
+        (&dangling, "Destination already exists: "),
+        (
+            &sidecar,
+            "Destination is the -journal file of the source database: ",
+        ),
+        (&missing_dir, "[Errno 2] No such file or directory: '"),
+    ] {
+        let err = snapshot_with(&db, dest, &options, &hooks).unwrap_err();
+        assert_eq!(err.exit_code(), 1, "{err:?}");
+        assert!(err.to_string().starts_with(prefix), "{err}");
+        assert_eq!(ran.get(), 0, "checkpoint ran for {}", dest.display());
+    }
+    assert_eq!(fs::read(&existing).unwrap(), b"keep");
+    assert!(!sidecar.exists());
+    // A missing source is still reported first, as before.
+    let err = snapshot_with(&dir.path().join("nope.db"), &existing, &options, &hooks).unwrap_err();
+    assert!(err.to_string().starts_with("Database not found: "), "{err}");
+    assert_eq!(ran.get(), 0);
+
+    let dest = dir.path().join("snap.db");
+    snapshot_with(&db, &dest, &options, &hooks).unwrap();
+    assert_eq!(ran.get(), 1);
+    assert_eq!(names(&dest), ["alpha", "bravo"]);
+    assert!(temp_leftovers(dir.path(), ".").is_empty());
+}
+
+#[test]
+fn snapshot_removes_its_temporary_file_when_the_checkpoint_fails() {
+    let (dir, db) = wal_db();
+    let failing = |_: &Path, _: CheckpointMode| -> Result<CheckpointResult> {
+        Err(Error::Sqlite("database is locked".to_string()))
+    };
+    let hooks = Hooks {
+        checkpoint: Some(&failing),
+        ..Hooks::default()
+    };
+    let dest = dir.path().join("snap.db");
+    let err = snapshot_with(&db, &dest, &SnapshotOptions::default(), &hooks).unwrap_err();
+    assert_eq!(err, Error::Sqlite("database is locked".to_string()));
+    assert!(!dest.exists());
+    assert!(temp_leftovers(dir.path(), ".snap.db.tmp-").is_empty());
 }

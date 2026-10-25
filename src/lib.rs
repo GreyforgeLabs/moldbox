@@ -875,14 +875,24 @@ fn reject_sidecar_destination(
     Ok(())
 }
 
-pub(crate) fn backup_with(
-    db_path: &Path,
-    dest_path: &Path,
-    options: &BackupOptions,
-    hooks: &Hooks<'_>,
-) -> Result<BackupResult> {
-    validate_backup_controls(options.pages_per_step, options.pause_ms)?;
-    let identity = validated_existing_database_path(&normalized(db_path))?;
+/// A destination that passed the pre-copy checks, with its private temporary
+/// file already created.
+struct PreparedDestination {
+    dest_path: PathBuf,
+    parent: PathBuf,
+    tmp_path: PathBuf,
+}
+
+impl PreparedDestination {
+    fn discard(self) {
+        let _ = fs::remove_file(&self.tmp_path);
+    }
+}
+
+/// Checks that `dest_path` is free and is not one of the source's sidecar
+/// names, then creates the private temporary file in its directory (which
+/// also reports a missing or unwritable directory).
+fn prepare_destination(source: &Path, dest_path: &Path) -> Result<PreparedDestination> {
     let dest_path = normalized(dest_path);
 
     // lstat: a dangling symlink also occupies the name and would make the
@@ -896,19 +906,45 @@ pub(crate) fn backup_with(
 
     let (name, parent) = pyfmt::pathlib_split(dest_path.as_os_str());
     let parent = PathBuf::from(parent);
-    reject_sidecar_destination(&identity.path, &dest_path, &name, &parent)?;
+    reject_sidecar_destination(source, &dest_path, &name, &parent)?;
     let mut prefix = b".".to_vec();
     prefix.extend_from_slice(name.as_bytes());
     prefix.extend_from_slice(b".tmp-");
     let tmp_path = make_temp_file(parent.as_os_str(), &prefix)?;
+    Ok(PreparedDestination {
+        dest_path,
+        parent,
+        tmp_path,
+    })
+}
 
+pub(crate) fn backup_with(
+    db_path: &Path,
+    dest_path: &Path,
+    options: &BackupOptions,
+    hooks: &Hooks<'_>,
+) -> Result<BackupResult> {
+    validate_backup_controls(options.pages_per_step, options.pause_ms)?;
+    let identity = validated_existing_database_path(&normalized(db_path))?;
+    let prepared = prepare_destination(&identity.path, dest_path)?;
+    backup_into(identity, prepared, options, hooks)
+}
+
+/// Copies the source into the prepared temporary file and publishes it. The
+/// temporary file is removed on every error.
+fn backup_into(
+    identity: DatabaseIdentity,
+    prepared: PreparedDestination,
+    options: &BackupOptions,
+    hooks: &Hooks<'_>,
+) -> Result<BackupResult> {
     let start = Instant::now();
     let mut published = false;
     let outcome = copy_validate_publish(
         &identity,
-        &tmp_path,
-        &dest_path,
-        &parent,
+        &prepared.tmp_path,
+        &prepared.dest_path,
+        &prepared.parent,
         options,
         hooks,
         &mut published,
@@ -919,17 +955,17 @@ pub(crate) fn backup_with(
             if published {
                 // Best-effort rollback after a post-publish sync failure. The
                 // caller must inspect the destination if this cleanup also fails.
-                let _ = fs::remove_file(&dest_path);
-                let _ = fsync_directory(&parent, hooks);
+                let _ = fs::remove_file(&prepared.dest_path);
+                let _ = fsync_directory(&prepared.parent, hooks);
             }
-            let _ = fs::remove_file(&tmp_path);
+            prepared.discard();
             return Err(err);
         }
     };
     let elapsed = elapsed_ms(start);
     Ok(BackupResult {
         source: identity.path,
-        destination: dest_path,
+        destination: prepared.dest_path,
         size_bytes,
         sha256,
         elapsed_ms: elapsed,
@@ -943,16 +979,40 @@ pub(crate) fn snapshot_with(
     hooks: &Hooks<'_>,
 ) -> Result<SnapshotResult> {
     validate_backup_controls(options.pages_per_step, options.pause_ms)?;
+    // Check the destination before the checkpoint, which writes to the source
+    // and can wait out the busy timeout: a destination that cannot be used is
+    // reported at once and leaves the source untouched.
+    let identity = validated_existing_database_path(&normalized(db_path))?;
+    let prepared = prepare_destination(&identity.path, dest_path)?;
     let checkpoint = match hooks.checkpoint {
-        Some(hook) => hook(db_path, options.checkpoint_mode)?,
-        None => checkpoint_with(db_path, options.checkpoint_mode, hooks)?,
+        Some(hook) => hook(db_path, options.checkpoint_mode),
+        None => checkpoint_with(db_path, options.checkpoint_mode, hooks),
     };
-    if options.require_complete && !checkpoint.fully_checkpointed() {
-        return Err(Error::IncompleteCheckpoint(Box::new(checkpoint)));
-    }
-    let backup = backup_with(
-        db_path,
-        dest_path,
+    let checkpoint = match checkpoint {
+        Ok(checkpoint) if !options.require_complete || checkpoint.fully_checkpointed() => {
+            checkpoint
+        }
+        Ok(checkpoint) => {
+            prepared.discard();
+            return Err(Error::IncompleteCheckpoint(Box::new(checkpoint)));
+        }
+        Err(err) => {
+            prepared.discard();
+            return Err(err);
+        }
+    };
+    // Validate the source again: the backup must copy the file that is at
+    // the path now.
+    let identity = match validated_existing_database_path(&normalized(db_path)) {
+        Ok(identity) => identity,
+        Err(err) => {
+            prepared.discard();
+            return Err(err);
+        }
+    };
+    let backup = backup_into(
+        identity,
+        prepared,
         &BackupOptions {
             pages_per_step: options.pages_per_step,
             pause_ms: options.pause_ms,
