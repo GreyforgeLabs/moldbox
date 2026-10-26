@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="712" height="577" viewBox="0 0 712 577" role="img" aria-label="moldbox">
+<title>moldbox</title>
+<rect width="712" height="577" rx="10" fill="#0a0d11"/>
+<path d="M0 10a10 10 0 0 1 10-10h692a10 10 0 0 1 10 10v18H0z" fill="#151a21"/>
+<circle cx="18" cy="14" r="5.5" fill="#ff5f57"/>
+<circle cx="36" cy="14" r="5.5" fill="#febc2e"/>
+<circle cx="54" cy="14" r="5.5" fill="#28c840"/>
+<text x="356.0" y="18.5" text-anchor="middle" font-family="ui-sans-serif,system-ui,sans-serif" font-size="12" fill="#7d8794">moldbox</text>
+<g font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,'Liberation Mono','DejaVu Sans Mono',monospace" font-size="13" fill="#e9edf1" xml:space="preserve">
+<text x="18" y="44" textLength="164.2" lengthAdjust="spacingAndGlyphs"><tspan fill="#7d8794">$ </tspan><tspan fill="#ffffff">moldbox info app.db</tspan></text>
+<text x="18" y="63" textLength="101.7" lengthAdjust="spacingAndGlyphs"><tspan fill="#be96ff">database info</tspan></text>
+<text x="18" y="82" textLength="297.2" lengthAdjust="spacingAndGlyphs">  <tspan fill="#7d8794">path:</tspan>               /srv/shop/app.db</text>
+<text x="18" y="101" textLength="258.1" lengthAdjust="spacingAndGlyphs">  <tspan fill="#7d8794">size:</tspan>               4,096 bytes</text>
+<text x="18" y="120" textLength="195.5" lengthAdjust="spacingAndGlyphs">  <tspan fill="#7d8794">journal mode:</tspan>       <tspan fill="#fda52b">wal</tspan></text>
+<text x="18" y="139" textLength="195.5" lengthAdjust="spacingAndGlyphs">  <tspan fill="#7d8794">WAL file:</tspan>           <tspan fill="#fda52b">yes</tspan></text>
+<text x="18" y="158" textLength="289.3" lengthAdjust="spacingAndGlyphs">  <tspan fill="#7d8794">WAL size:</tspan>           1,215,432 bytes</text>
+<text x="18" y="177" textLength="211.1" lengthAdjust="spacingAndGlyphs">  <tspan fill="#7d8794">page size:</tspan>          4,096</text>
+<text x="18" y="196" textLength="195.5" lengthAdjust="spacingAndGlyphs">  <tspan fill="#7d8794">page count:</tspan>         293</text>
+<text x="18" y="215" textLength="179.9" lengthAdjust="spacingAndGlyphs">  <tspan fill="#7d8794">freelist pages:</tspan>     0</text>
+<text x="18" y="234" textLength="398.8" lengthAdjust="spacingAndGlyphs"><tspan fill="#7d8794">$ </tspan><tspan fill="#ffffff">moldbox snapshot app.db backups/app-2026-10-26.db</tspan></text>
+<text x="18" y="253" textLength="305.0" lengthAdjust="spacingAndGlyphs"><tspan fill="#be96ff">snapshot complete</tspan> <tspan fill="#7ed38c">[checkpoint complete]</tspan></text>
+<text x="18" y="272" textLength="187.7" lengthAdjust="spacingAndGlyphs">  <tspan fill="#7d8794">checkpoint busy:</tspan>    <tspan fill="#fda52b">no</tspan></text>
+<text x="18" y="291" textLength="195.5" lengthAdjust="spacingAndGlyphs">  <tspan fill="#7d8794">wal pages:</tspan>          295</text>
+<text x="18" y="310" textLength="195.5" lengthAdjust="spacingAndGlyphs">  <tspan fill="#7d8794">checkpointed:</tspan>       295</text>
+<text x="18" y="329" textLength="367.5" lengthAdjust="spacingAndGlyphs">  <tspan fill="#7d8794">destination:</tspan>        backups/app-2026-10-26.db</text>
+<text x="18" y="348" textLength="289.3" lengthAdjust="spacingAndGlyphs">  <tspan fill="#7d8794">size:</tspan>               1,200,128 bytes</text>
+<text x="18" y="367" textLength="672.5" lengthAdjust="spacingAndGlyphs">  <tspan fill="#7d8794">sha256:</tspan>             3f8779cfe262430937eba8e0069526ad5fc614a90f88644b42f376993b012d1e</text>
+<text x="18" y="386" textLength="226.8" lengthAdjust="spacingAndGlyphs">  <tspan fill="#7d8794">elapsed:</tspan>            6.66 ms</text>
+<text x="18" y="405" textLength="461.4" lengthAdjust="spacingAndGlyphs"><tspan fill="#7d8794">$ </tspan><tspan fill="#ffffff">moldbox --json backup app.db backups/app-latest.db | jq .</tspan></text>
+<text x="18" y="424" textLength="7.8" lengthAdjust="spacingAndGlyphs"><tspan fill="#7d8794">{</tspan></text>
+<text x="18" y="443" textLength="172.0" lengthAdjust="spacingAndGlyphs">  <tspan fill="#38c8e8">&quot;command&quot;</tspan>: <tspan fill="#7ed38c">&quot;backup&quot;</tspan>,</text>
+<text x="18" y="462" textLength="242.4" lengthAdjust="spacingAndGlyphs">  <tspan fill="#38c8e8">&quot;source&quot;</tspan>: <tspan fill="#7ed38c">&quot;/srv/shop/app.db&quot;</tspan>,</text>
+<text x="18" y="481" textLength="320.6" lengthAdjust="spacingAndGlyphs">  <tspan fill="#38c8e8">&quot;destination&quot;</tspan>: <tspan fill="#7ed38c">&quot;backups/app-latest.db&quot;</tspan>,</text>
+<text x="18" y="500" textLength="187.7" lengthAdjust="spacingAndGlyphs">  <tspan fill="#38c8e8">&quot;size_bytes&quot;</tspan>: <tspan fill="#fda52b">1200128</tspan>,</text>
+<text x="18" y="519" textLength="617.8" lengthAdjust="spacingAndGlyphs">  <tspan fill="#38c8e8">&quot;sha256&quot;</tspan>: <tspan fill="#7ed38c">&quot;3f8779cfe262430937eba8e0069526ad5fc614a90f88644b42f376993b012d1e&quot;</tspan>,</text>
+<text x="18" y="538" textLength="156.4" lengthAdjust="spacingAndGlyphs">  <tspan fill="#38c8e8">&quot;elapsed_ms&quot;</tspan>: <tspan fill="#fda52b">5.63</tspan></text>
+<text x="18" y="557" textLength="7.8" lengthAdjust="spacingAndGlyphs"><tspan fill="#7d8794">}</tspan></text>
+</g>
+</svg>
