@@ -54,7 +54,7 @@ moldbox backup myapp.db /backups/myapp-$(date +%F).db
 
 ## Formerly sqlite-checkpoint
 
-moldbox was released as `sqlite-checkpoint` up to v0.3.0 and renamed in 0.4.0. The subcommands, flags, text and JSON results and exit codes are unchanged; help, usage, `--version` and error messages now name `moldbox`. The release tarball and `cargo install` also include a `sqlite-checkpoint` command that prints a one-line deprecation note to stderr and then behaves exactly like `moldbox`, so existing scripts keep running while you switch them to `moldbox`.
+moldbox was released as `sqlite-checkpoint` up to v0.3.0 and renamed in 0.4.0. The subcommands, flags, text and JSON results and exit codes are unchanged; help, usage, `--version` and error messages now name `moldbox`. The release tarball and `cargo install` also include a `sqlite-checkpoint` command that prints a one-line deprecation note to stderr and then behaves exactly like `moldbox`, so existing scripts keep running while you switch them to `moldbox`. With the prebuilt tarball, install it next to `moldbox` with `install -Dm755 $PKG/sqlite-checkpoint ~/.local/bin/sqlite-checkpoint`.
 
 ## Features
 
