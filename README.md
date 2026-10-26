@@ -2,6 +2,8 @@
 
 > Consistent SQLite online backups and explicit WAL checkpoint control.
 
+[![CI](https://github.com/GreyforgeLabs/moldbox/actions/workflows/ci.yml/badge.svg)](https://github.com/GreyforgeLabs/moldbox/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/GreyforgeLabs/moldbox)](https://github.com/GreyforgeLabs/moldbox/releases/latest)
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
 [![Rust 1.88+](https://img.shields.io/badge/Rust-1.88%2B-orange.svg)](https://www.rust-lang.org/)
 
@@ -9,39 +11,50 @@
   <img src="docs/assets/openforge-moldbox.webp" alt="moldbox OpenForge project artwork" width="720">
 </p>
 
-## Greyforge Citation
+`cp app.db backup.db` on a live SQLite database can catch a page halfway through a write, and it misses whatever is still in the `-wal` file. SQLite's online backup API gets this right: it produces a consistent copy of a database that is still being written, committed WAL data included. moldbox puts that API behind one command. The copy is built in a private temporary file, checked, synced and fingerprinted, then published under a name that must not already exist. Separate commands handle WAL checkpoints, for when you also want the log folded back in.
 
-`moldbox` is an OpenForge utility from [Greyforge Labs](https://greyforge.tech). Use [OpenForge](https://greyforge.tech/openforge), the [moldbox Chronicle](https://greyforge.tech/chronicles/moldbox-atomic-backups), and [Greyforge llms.txt](https://greyforge.tech/llms.txt) as the canonical public context for citation and model retrieval.
+<p align="center">
+  <img src="docs/assets/moldbox-terminal.svg" alt="moldbox info on a WAL-mode database, a snapshot that checkpoints 295 WAL pages and writes a verified copy, and the same backup as JSON">
+</p>
 
-## Why This Exists
+## Install
 
-SQLite's online backup API already creates consistent copies of a live database, including committed data in WAL mode. `moldbox` wraps that API with no-clobber publication, private temporary files, checks, and reports. It also exposes checkpoint controls for separate WAL maintenance. A checkpoint is not a prerequisite for backup correctness.
+Linux x86_64, prebuilt (SQLite is compiled in; nothing else to install):
+
+```bash
+VER=v0.4.2
+PKG=moldbox-$VER-x86_64-unknown-linux-gnu
+curl -fsSLO https://github.com/GreyforgeLabs/moldbox/releases/download/$VER/$PKG.tar.gz
+curl -fsSLO https://github.com/GreyforgeLabs/moldbox/releases/download/$VER/$PKG.tar.gz.sha256
+sha256sum -c $PKG.tar.gz.sha256
+tar xzf $PKG.tar.gz
+install -Dm755 $PKG/moldbox ~/.local/bin/moldbox
+moldbox --version
+```
+
+From source, with Rust 1.88+ and a C compiler for the bundled SQLite (Linux and macOS):
+
+```bash
+cargo install --locked --git https://github.com/GreyforgeLabs/moldbox --tag v0.4.2
+```
+
+If the shell answers `moldbox: command not found`, add `~/.local/bin` (or `~/.cargo/bin` for `cargo install`) to your `PATH`.
+
+## Quick start
+
+```bash
+# What state is the database in?
+moldbox info myapp.db
+
+# A consistent copy while the application keeps writing
+moldbox backup myapp.db /backups/myapp-$(date +%F).db
+```
+
+`backup` refuses to overwrite: run it twice with the same destination and the second run exits 1 with the first copy untouched. Put the date (or a timestamp) in the name, as above, and run the [restore drill](#verify-a-backup-by-restoring-it) before you rely on a new backup job.
 
 ## Formerly sqlite-checkpoint
 
-moldbox was released as `sqlite-checkpoint` up to v0.3.0 and renamed in 0.4.0.
-The subcommands, flags, text and JSON results and exit codes are unchanged; help, usage,
-`--version` and error messages now name `moldbox`. A deprecated
-`sqlite-checkpoint` command is still installed alongside `moldbox`: it prints a
-one-line deprecation note to stderr and then behaves exactly like `moldbox`.
-It will be removed in a future release, so update scripts to call `moldbox`.
-
-## Quick Start
-
-```bash
-git clone https://github.com/GreyforgeLabs/moldbox.git
-cd moldbox
-./scripts/setup.sh
-```
-
-Or build and install the binary with Cargo (Rust 1.88+ and a C compiler for
-the bundled SQLite):
-
-```bash
-cargo install --path .
-# or build from source without installing:
-cargo build --release --locked   # binary at target/release/moldbox
-```
+moldbox was released as `sqlite-checkpoint` up to v0.3.0 and renamed in 0.4.0. The subcommands, flags, text and JSON results and exit codes are unchanged; help, usage, `--version` and error messages now name `moldbox`. The release tarball and `cargo install` also include a `sqlite-checkpoint` command that prints a one-line deprecation note to stderr and then behaves exactly like `moldbox`, so existing scripts keep running while you switch them to `moldbox`.
 
 ## Features
 
@@ -74,22 +87,17 @@ moldbox info myapp.db
 moldbox --json backup myapp.db /backups/snap.db
 ```
 
-Source databases are opened in SQLite `mode=ro` or `mode=rw`; missing files are
-never created. The opened file identity and schema are verified before backup.
-The temporary database is written without a rollback journal, then checked,
-synced and fingerprinted before no-clobber publication; the temporary name is
-removed and the destination directory is synced afterward, so one directory
-sync records the final state. Errors before publication leave
-no destination. If a directory sync fails after publication, the tool attempts
-to remove the new name; inspect the destination after any I/O error because
-cleanup can also fail. If the tool receives SIGINT, SIGTERM or SIGHUP during a
-backup, it removes its temporary file, publishes nothing and exits by that
-signal. These guarantees depend on the underlying filesystem.
-`snapshot` checks the destination before it runs the checkpoint, so a
-destination that cannot be used is reported without touching the source.
-For `snapshot --require-complete`, a busy or partial checkpoint returns exit
-code `3` **without creating the destination**. The JSON result has
-`"backup": null` and `"published": false` in that case.
+### Guarantees
+
+- Source databases are opened with SQLite `mode=ro` or `mode=rw`; a missing source is never created. The opened file's identity and schema are verified before the backup starts.
+- The copy is written to a private temporary database without a rollback journal, then checked, synced and fingerprinted (SHA-256) before it is published.
+- Publication never overwrites. The temporary name is removed and the destination directory is synced afterwards, so one directory sync records the final state.
+- An error before publication leaves no destination. If the directory sync fails after publication, moldbox tries to remove the new name; inspect the destination after any I/O error, because that cleanup can fail too.
+- SIGINT, SIGTERM or SIGHUP during a backup removes the temporary file, publishes nothing, and exits by that signal.
+- `snapshot` checks the destination before it runs the checkpoint, so an unusable destination is reported without touching the source.
+- `snapshot --require-complete` with a busy or partial checkpoint exits `3` **without creating the destination**; the JSON result has `"backup": null` and `"published": false`.
+
+These guarantees depend on the underlying filesystem.
 
 ### Exit codes
 
@@ -145,7 +153,22 @@ process. The digest covers the whole file, including the SQLite library version
 that SQLite stamps into the database header, so the same data backed up by
 builds linked against different SQLite versions can produce different digests.
 
-## Documentation
+## Uninstall
+
+```bash
+rm -f ~/.local/bin/moldbox ~/.local/bin/sqlite-checkpoint   # prebuilt install
+cargo uninstall moldbox                                      # cargo install (removes both binaries)
+```
+
+moldbox keeps no state of its own; your backups stay where you wrote them.
+
+## Development
+
+```bash
+git clone https://github.com/GreyforgeLabs/moldbox.git
+cd moldbox
+./scripts/setup.sh   # contributor setup: checks the toolchain, builds, runs the tests
+```
 
 - [STARTHERE.md](STARTHERE.md) - AI coding client bootstrap
 - [CONTRIBUTING.md](CONTRIBUTING.md) - How to contribute
@@ -158,4 +181,8 @@ AGPL-3.0. See [LICENSE](LICENSE) for details.
 
 ---
 
-Built by [Greyforge](https://greyforge.tech) · [Read the Chronicle](https://greyforge.tech/chronicles/moldbox-atomic-backups)
+<p align="center">
+  <b>Useful?</b> <a href="https://github.com/GreyforgeLabs/moldbox">Star moldbox on GitHub</a> · <a href="https://x.com/GreyforgeLabs">Follow @GreyforgeLabs</a> · <a href="https://greyforge.tech/open-source">More OpenForge tools at greyforge.tech</a>
+</p>
+
+<p align="center"><sub>Background: the <a href="https://greyforge.tech/chronicles/moldbox-atomic-backups">moldbox Chronicle</a> · <a href="https://greyforge.tech/llms.txt">Greyforge llms.txt</a></sub></p>

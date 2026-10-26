@@ -44,6 +44,12 @@ chore: update dependencies
 - Update documentation for user-facing changes
 - No secrets, credentials, or internal paths in your code
 
+## Releasing
+
+1. Update `version` in `Cargo.toml` and add the `CHANGELOG.md` entry.
+2. Push a `vX.Y.Z` tag that matches the crate version. The release workflow tests, builds the Linux x86_64 tarball and its `.sha256`, and publishes the GitHub release.
+3. Update `VER=` and `--tag` in the README Install section, and check that the snippet downloads and verifies.
+
 ## Reporting Issues
 
 Use the GitHub issue templates. For bugs, include steps to reproduce. For features, describe the problem you're solving.
